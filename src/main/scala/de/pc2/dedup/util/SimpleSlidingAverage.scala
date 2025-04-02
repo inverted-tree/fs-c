@@ -17,10 +17,10 @@ import java.util.concurrent.locks.ReentrantLock
         tbb::atomic<uint64_t> sum_;
     public:
         /**
-         *
+ *
          * @param window_size > 0
-         * @return
-         */
+ * @return
+ */
         explicit SimpleSlidingAverage(int window_size);
 
         bool Add(uint64_t value);
@@ -29,27 +29,27 @@ import java.util.concurrent.locks.ReentrantLock
  */
 
 class SimpleSlidingAverage(windowSize: Int) {
-  val sum = new AtomicLong()
-  val queue = new ConcurrentLinkedQueue[Long]()
+    val sum = new AtomicLong()
+    val queue = new ConcurrentLinkedQueue[Long]()
 
-  def add(value: Long) {
-    this synchronized {
-      sum.addAndGet(value)
-      if (queue.size > windowSize) {
-        val old_value = queue.poll()
-        sum.addAndGet(-1 * old_value)
-      }
-      queue.add(value)
+    def add(value: Long): Unit = {
+        this synchronized {
+            sum.addAndGet(value)
+            if (queue.size > windowSize) {
+                val old_value = queue.poll()
+                sum.addAndGet(-1 * old_value)
+            }
+            queue.add(value)
+        }
     }
-  }
 
-  def getAverage(): Double = {
-    this synchronized {
-      if (queue.isEmpty) {
-        0.0
-      } else {
-        1.0 * sum.get / queue.size
-      }
+    def getAverage: Double = {
+        this synchronized {
+            if (queue.isEmpty) {
+                0.0
+            } else {
+                1.0 * sum.get / queue.size
+            }
+        }
     }
-  }
 }
