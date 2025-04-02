@@ -6,115 +6,113 @@ import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
 import java.util.Arrays
 import java.nio.charset.Charset
+import java.util
 
-/**
- * Compation object to create fingerprints of a chunk or a file
- */
-class DigestFactory(val digestType: String, val digestLength: Int, val salt: Option[String]) {
-	
-  lazy val saltArray = salt match {
-    case Some(s) => Some(s.getBytes(Charset.forName("UTF-8")))
-    case None => None
-  }
-  
-  /**
-   * Tests if the digest type is valid
-   */
-  def testDigestType() {
-    try {
-      val md = MessageDigest.getInstance(digestType)
-      if (digestLength > md.getDigestLength) {
-        throw new IllegalArgumentException("Digest length larger than 20 not allowed")
-      }
-    } catch {
-      case e: NoSuchAlgorithmException =>
-        throw new IllegalArgumentException("Digest type not known");
-    }
-  }
-  testDigestType()
+/** Compation object to create fingerprints of a chunk or a file
+  */
+class DigestFactory(
+    val digestType: String,
+    val digestLength: Int,
+    val salt: Option[String]
+) {
 
-  /**
-   * builder class for digests
-   */
-  class DigestBuilder {
-    val md = MessageDigest.getInstance(digestType)
-
-    /**
-     * Append new bytes to the current digest builder
-     */
-    def append(buf: Array[Byte], pos: Int, len: Int): DigestBuilder = {
-      if (len > 0) {
-        md.update(buf, pos, len)
-      }
-      return this
+    lazy val saltArray: Option[Array[Byte]] = salt match {
+        case Some(s) => Some(s.getBytes(Charset.forName("UTF-8")))
+        case None    => None
     }
 
-    /**
-     * Append new bytes from a bytebuffer to the current digest builder
-     */
-    def append(buf: ByteBuffer): DigestBuilder = {
-      md.update(buf)
-      return this
+    /** Tests if the digest type is valid
+      */
+    def testDigestType(): Unit = {
+        try {
+            val md = MessageDigest.getInstance(digestType)
+            if (digestLength > md.getDigestLength) {
+                throw new IllegalArgumentException(
+                  "Digest length larger than 20 not allowed"
+                )
+            }
+        } catch {
+            case e: NoSuchAlgorithmException =>
+                throw new IllegalArgumentException("Digest type not known");
+        }
+    }
+    testDigestType()
+
+    /** Builder class for Digests
+      */
+    class DigestBuilder {
+        val md: MessageDigest = MessageDigest.getInstance(digestType)
+
+        /** Append new bytes to the current DigestBuilder
+          */
+        def append(buf: Array[Byte], pos: Int, len: Int): DigestBuilder = {
+            if (len > 0) {
+                md.update(buf, pos, len)
+            }
+            return this
+        }
+
+        /** Append new bytes from a ByteBuffer to the current DigestBuilder
+          */
+        def append(buf: ByteBuffer): DigestBuilder = {
+            md.update(buf)
+            return this
+        }
+
+        /** Create a new Digest from the current data and reset the
+          * DigestBuilder
+          */
+        def build(): Digest = {
+            saltArray match {
+                case Some(sa) => md.update(sa)
+                case None     => // no salting
+            }
+            val fullDigest = md.digest()
+            val digest = if (digestLength == md.getDigestLength) {
+                fullDigest
+            } else {
+                val d = new Array[Byte](digestLength)
+                System.arraycopy(fullDigest, 0, d, 0, digestLength)
+                d
+            }
+            md.reset()
+
+            return new Digest(digest)
+        }
     }
 
-    /**
-     * create a new digest from the current data. Rests the digest builder
-     */
-    def build(): Digest = {
-      saltArray match {
-        case Some(sa) => md.update(sa)
-        case None => // no salting
-      }
-      val fullDigest = md.digest()
-      val digest = if (digestLength == md.getDigestLength) {
-        fullDigest
-      } else {
-        val d = new Array[Byte](digestLength)
-        System.arraycopy(fullDigest, 0, d, 0, digestLength)
-        d
-      }
-      md.reset()
-      return new Digest(digest)
-
+    /** Creates a new DigestBuilder
+      */
+    def builder(): DigestBuilder = {
+        return new DigestBuilder()
     }
-  }
-
-  /**
-   * Creates a new digest builder
-   */
-  def builder(): DigestBuilder = {
-    return new DigestBuilder()
-  }
 }
 
-/**
- * Fingerprint of a chunk or a file.
- * The reason not to use a byte array directly is that hashCode and equals has
- * not the expected behavior on a byte array
- */
+/** Fingerprint of a chunk or a file. The reason not to use a ByteArray directly
+  * is that hashCode and equals has not the expected behavior on a ByteArray
+  */
 case class Digest(digest: Array[Byte]) {
-  /**
-   * Hashcode of the digest. Calls Arrays.hashCode()
-   */
-  override def hashCode: Int = return Arrays.hashCode(digest)
 
-  /**
-   * Checks if two digests are equal. Calls Array.equal
-   */
-  override def equals(o: Any): Boolean = {
-    o match {
-      case Digest(fp) => Arrays.equals(this.digest, fp)
-      case _ => false
-    }
-  }
+    /** Hashcode of the digest. Calls Arrays.hashCode()
+      */
+    override def hashCode: Int = return util.Arrays.hashCode(digest)
 
-  override def toString(): String = {
-    val bi = new BigInteger(1, digest)
-    val result = bi.toString(16)
-    if (result.length() % 2 != 0) {
-      "0" + result
-    } else {
-      result
+    /** Checks if two digests are equal. Calls Array.equals()
+      */
+    override def equals(o: Any): Boolean = {
+        o match {
+            case Digest(fp) => util.Arrays.equals(this.digest, fp)
+            case _          => false
+        }
     }
-  }
+
+    override def toString: String = {
+        val bi = new BigInteger(1, digest)
+        val result = bi.toString(16)
+        if (result.length() % 2 != 0) {
+            "0" + result
+        } else {
+            result
+        }
+    }
 }

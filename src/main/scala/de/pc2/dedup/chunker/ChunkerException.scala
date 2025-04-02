@@ -1,11 +1,10 @@
 package de.pc2.dedup.chunker
 
-/**
- * Exception throws if an error ocurred during the chunking process.
- */
+/** Exception throws if an error occurred during the chunking process.
+  */
 class ChunkerException(message: String, cause: Throwable) extends Exception {
-  /**
-   * Simple constructor with cause exception as null
-   */
-  def this(message: String) = this(message, null)
+
+    /** Simple constructor with cause exception as null
+      */
+    def this(message: String) = this(message, null)
 }

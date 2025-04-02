@@ -8,7 +8,9 @@ tmp/
 *.tmp
 *.swp
 .svn
-target
+target/
 /nbproject/private/
 /.settings/
 *.pyc
+.bsp/
+.idea/
