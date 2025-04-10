@@ -1,13 +1,12 @@
 package de.pc2.dedup.fschunk.trace
 
-import org.clapper.argot.ArgotParser
-import org.clapper.argot.ArgotConverters
-import com.hazelcast.core.Hazelcast
+import com.hazelcast.core.{Hazelcast, HazelcastInstance}
+import scopt.OParser
 
+import java.io.File
 import de.pc2.dedup.chunker.fixed.FixedChunker
 import de.pc2.dedup.chunker.rabin.RabinChunker
-import de.pc2.dedup.chunker.Chunker
-import de.pc2.dedup.chunker.DigestFactory
+import de.pc2.dedup.chunker.{Chunker, ChunkerFactory, DigestFactory}
 import de.pc2.dedup.fschunk.format.Format
 import de.pc2.dedup.fschunk.handler.direct.ChunkIndex
 import de.pc2.dedup.fschunk.handler.direct.InMemoryChunkHandler
@@ -17,473 +16,259 @@ import de.pc2.dedup.fschunk.Reporter
 import de.pc2.dedup.util.Log
 import de.pc2.dedup.util.SystemExitException
 
+case class TraceConfig(
+    filenames: Seq[File] = Seq(),
+    chunkerNames: Seq[String] = Seq(),
+    customHandler: Option[String] = None,
+    digestLength: Int = 20,
+    digestType: String = "SHA-1",
+    distributed: Boolean = false,
+    followSymlinks: Boolean = false,
+    label: Option[String] = None,
+    listing: Boolean = false,
+    logChunkHashes: Boolean = false,
+    memoryReporting: Boolean = false,
+    output: Option[File] = None,
+    privacyMode: PrivacyMode = PrivacyMode.None,
+    progressFile: Option[File] = None,
+    silent: Boolean = false,
+    salt: Option[String] = None,
+    threads: Int = 1,
+    useDefaultIgnores: Boolean = true,
+    useJavaDirectoryListing: Boolean = false,
+    reportInterval: Int = 60,
+    relativePaths: Boolean = false
+)
+
 object Main extends Log {
     def main(args: Array[String]): Unit = {
-        try {
-            import ArgotConverters._
-
-            val parser =
-                new ArgotParser("fs-c trace", preUsage = Some("Version 0.3.14"))
-
-            val optionFilenames = parser.multiOption[String](
-              List("f", "filename"),
-              "filenames",
-              "Filename to trace (deprecated)"
+        val builder = OParser.builder[TraceConfig]
+        val parser = {
+            import builder._
+            OParser.sequence(
+              programName("fs-c"),
+              head("fs-c", "0.4.0"),
+              opt[Seq[String]]('c', "chunker")
+                  .valueName("<chunker1>,<chunker2>,...")
+                  .action((x, c) => c.copy(chunkerNames = x))
+                  .text("Explicitly set the chunker(s)"),
+              opt[Int]("digest-length")
+                  .valueName("<Int>")
+                  .action((x, c) => c.copy(digestLength = x))
+                  .text("Length of the digest / fingerprint (default = 20)"),
+              opt[String]("digest-type")
+                  .valueName("SHA-1/...")
+                  .action((x, c) => c.copy(digestType = x))
+                  .text("Type of fingerprint to be used"),
+              opt[Unit]('d', "distributed")
+                  .action((_, c) => c.copy(distributed = true))
+                  .text("Run the program in cluster mode"),
+              opt[Unit]("follow-symlinks")
+                  .action((_, c) => c.copy(followSymlinks = true))
+                  .text("Follow symlinks in input files"),
+              opt[Option[String]]("handler")
+                  .valueName("<handler>")
+                  .action((x, c) => c.copy(customHandler = x))
+                  .text("Fully qualified class name of a custom chunk handler"),
+              opt[Boolean]("java-dir-listing")
+                  .action((_, c) => c.copy(useJavaDirectoryListing = true))
+                  .text(
+                    "Uses Javas builtin directory listing instead of the default method"
+                  ),
+              opt[Int]('j', "jobs")
+                  .action((x, c) => c.copy(threads = x))
+                  .text("Number of concurrent jobs to run"),
+              opt[Option[String]]("label")
+                  .valueName("<label>")
+                  .action((x, c) => c.copy(label = x))
+                  .text("Use the file label"),
+              opt[Unit]('l', "listing")
+                  .action((_, c) => c.copy(listing = true))
+                  .text("Input file is a listing of files to trace"),
+              opt[Boolean]("log-hashes")
+                  .action((_, c) => c.copy(logChunkHashes = true))
+                  .text("Log chunker hashes in trace file"),
+              opt[Boolean]("memory-usage")
+                  .action((_, c) => c.copy(memoryReporting = true))
+                  .text("Report memory usage"),
+              opt[Boolean]("no-default-ignores")
+                  .action((_, c) => c.copy(useDefaultIgnores = false))
+                  .text("Don't use the default ignore list"),
+              opt[Option[File]]('o', "output")
+                  .valueName("<file>")
+                  .action((x, c) => c.copy(output = x))
+                  .text("Print output to a file"),
+              opt[String]("privacy-mode")
+                  .valueName("<mode>")
+                  .action((x, c) =>
+                      x match {
+                          case "none" => c.copy(privacyMode = PrivacyMode.None)
+                          case "reversible" =>
+                              c.copy(privacyMode = PrivacyMode.Reversible)
+                          case "hash" => c.copy(privacyMode = PrivacyMode.Hash)
+                          case "dir-hash" =>
+                              c.copy(privacyMode = PrivacyMode.DirHash)
+                          case _ =>
+                              println("Invalid option %s".format(x))
+                              sys.exit(1)
+                      }
+                  )
+                  .text(
+                    "Set the privacy mode. Options are: none (=default) | reversible | hash | dir-hash"
+                  ),
+              opt[Option[File]]("progress-file")
+                  .valueName("<file>")
+                  .action((x, c) => c.copy(progressFile = x))
+                  .text("Track already traced files in the provided file"),
+              opt[Int]('r', "report")
+                  .action((x, c) => c.copy(reportInterval = x))
+                  .text(
+                    "Interval between progress reports in seconds (default = 60, 0 = no report)"
+                  ),
+              opt[Option[String]]("salt")
+                  .valueName("<salt>")
+                  .action((x, c) => c.copy(salt = x))
+                  .text("Salt the fingerprints"),
+              opt[Unit]('s', "silent")
+                  .action((_, c) => c.copy(silent = true))
+                  .text("Reduced output"),
+              opt[Boolean]("store-relative-path")
+                  .action((_, c) => c.copy(relativePaths = true))
+                  .text("Stores only relative paths"),
+              arg[Seq[File]]("Input Files")
+                  .valueName("<file1>,<file2>,...")
+                  .action((x, c) => c.copy(filenames = x))
+                  .text("Files to be traced")
             )
-            val optionChunkerNames = parser.multiOption[String](
-              List("c", "chunker"),
-              "chunker",
-              "Chunker to use"
-            )
-            val optionOutput = parser.option[String](
-              List("o", "output"),
-              "output",
-              "Output file (optional)"
-            )
-            val optionThreads = parser.option[Int](
-              List("t", "threads"),
-              "threads",
-              "number of concurrent threads"
-            )
-            val optionSilent =
-                parser.flag[Boolean](List("s", "silent"), "Reduced output")
-            val optionListing = parser.flag[Boolean](
-              List("l", "listing"),
-              "File contains a listing of files"
-            )
-            val optionPrivacy =
-                parser.flag[Boolean](List("p", "privacy"), "Privacy Mode")
-            val optionPrivacyMode = parser.option[String](
-              List("privacy-mode"),
-              "privacy-mode",
-              "Privacy mode (full-default (default), full-sha1, directory-sha1"
-            )
-            val optionSalt = parser
-                .option[String](List("salt"), "salt", "Salt the fingerprints")
-            val optionDigestLength = parser.option[Int](
-              "digest-length",
-              "digestLength",
-              "Length of Digest (Fingerprint)"
-            )
-            val optionDigestType = parser.option[String](
-              "digest-type",
-              "digestType",
-              "Type of Digest (Fingerprint)"
-            )
-            val optionCustomHandler = parser.option[String](
-              "custom-handler",
-              "custom chunk handler",
-              "Full classname of a custom chunk handler"
-            )
-            val optionNoDefaultIgnores = parser.flag[Boolean](
-              "no-default-ignores",
-              false,
-              "Avoid using the default ignore list"
-            )
-            val optionFollowSymlinks = parser
-                .flag[Boolean]("follow-symlinks", false, "Follow symlinks")
-            val optionChunkHashes = parser.flag[Boolean](
-              "log-chunker-hashes",
-              false,
-              "Logs chunker hashes (e.g. rabin fingerprints) and stores them in trace files"
-            )
-            val optionLabel =
-                parser.option[String]("label", "label", "File label")
-            val optionProgressFile = parser.option[String](
-              "progress-file",
-              "progressFile",
-              "File containing all processed filenames"
-            )
-            val optionReport = parser.option[Int](
-              List("r", "report"),
-              "report",
-              "Interval between progess reports in seconds (Default: 1 minute, 0 = no report)"
-            )
-            val optionDistributed =
-                parser.flag[Boolean]("cluster", false, "Distributed mode")
-            val optionRelativePaths = parser.flag[Boolean](
-              "store-relative-path",
-              false,
-              "Stores only relative path names (hashes only the relative pathes if privacy mode is used"
-            )
-            val optionUseJavaDirectoryListing = parser.flag[Boolean](
-              "use-java-directory-listing",
-              false,
-              "Uses Java buildin directory listing instead of the default method (expert)"
-            )
-            val optionMemoryReporting = parser.flag[Boolean](
-              "report-memory-usage",
-              false,
-              "Report memory usage (expert)"
-            )
-            val parameterFilenames = parser.multiParameter[String](
-              "input filenames",
-              "Input trace files files to trace",
-              true
-            ) { (s, opt) =>
-                val file = new java.io.File(s)
-                if (!file.exists) {
-                    parser.usage("Input file \"" + s + "\" does not exist.")
-                }
-                s
-            }
-            parser.parse(args)
-
-            val threadCount = optionThreads.value match {
-                case Some(t) => t
-                case None    => 1
-            }
-            val digestLength = optionDigestLength.value match {
-                case Some(l) => l
-                case None    => 20
-            }
-            val digestType = optionDigestType.value match {
-                case Some(t) => t
-                case None    => "SHA-1"
-            }
-            val reportInterval = optionReport.value
-            val silent = optionSilent.value match {
-                case Some(b) => b
-                case None    => false
-            }
-
-            val distributedMode = optionDistributed.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            val followSymlinks = optionFollowSymlinks.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            val privacyMode = optionPrivacyMode.value match {
-                case None =>
-                    if (optionPrivacy.value.getOrElse(false))
-                        PrivacyMode.FlatDefault
-                    else
-                        PrivacyMode.NoPrivacy
-                case Some(s) =>
-                    if (!optionPrivacy.value.getOrElse(false))
-                        parser.usage(
-                          "Cannot use --privacy-mode without --privacy"
-                        )
-                    else {
-                        s match {
-                            case "flat-default"   => PrivacyMode.FlatDefault
-                            case "flat-sha1"      => PrivacyMode.FlatSHA1
-                            case "directory-sha1" => PrivacyMode.DirectorySHA1
-                            case _ =>
-                                parser.usage("Invalid privacy-mode")
-                        }
-                    }
-            }
-            val format = "protobuf"
-            val useIgnoreList = optionNoDefaultIgnores.value match {
-                case Some(b) => !b
-                case None    => true
-            }
-            val logChunkHashes = optionChunkHashes.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            val useRelativePaths = optionRelativePaths.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            val useJavaDirectoryListing =
-                optionUseJavaDirectoryListing.value match {
-                    case Some(b) => b
-                    case None    => false
-                }
-            val reportMemoryUsage = optionMemoryReporting.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            def getChunker(
-                chunkerName: String
-            ): (Chunker, List[FileDataHandler]) = {
-                val handler = optionOutput.value match {
-                    case None =>
-                        optionCustomHandler.value match {
-                            case Some(className) =>
-                                try {
-                                    val customHandler = Class
-                                        .forName(className)
-                                        .newInstance
-                                        .asInstanceOf[FileDataHandler]
-                                    customHandler :: Nil
-                                } catch {
-                                    case e: Exception =>
-                                        throw new Exception(
-                                          "Failed to instanciate custom chunk handler %s: %s"
-                                              .format(className, e)
-                                        )
-                                }
-                            case None =>
-                                new InMemoryChunkHandler(
-                                  silent,
-                                  new ChunkIndex,
-                                  Some(chunkerName)
-                                ) :: Nil
-                        }
-                    case Some(o) =>
-                        optionCustomHandler.value match {
-                            case Some(className) =>
-                                throw new Exception(
-                                  "Cannot use custom chunk handler with output option"
-                                )
-                            case None => // ook
-                        }
-                        val outputFilename = if (distributedMode) {
-                            val memberId = Hazelcast
-                                .getCluster()
-                                .getLocalMember()
-                                .getInetSocketAddress()
-                                .getHostName()
-                            "%s-%s-%s".format(o, chunkerName, memberId)
-                        } else {
-                            "%s-%s".format(o, chunkerName)
-                        }
-                        Format(format).createWriter(
-                          outputFilename,
-                          privacyMode
-                        ) :: Nil
-                }
-
-                val c: Chunker = chunkerName match {
-                    case "cdc2" =>
-                        new RabinChunker(
-                          512,
-                          2 * 1024,
-                          8 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c2"
-                        )
-                    case "cdc4" =>
-                        new RabinChunker(
-                          1 * 1024,
-                          4 * 1024,
-                          16 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c4"
-                        )
-                    case "cdc8" =>
-                        new RabinChunker(
-                          2 * 1024,
-                          8 * 1024,
-                          32 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c8"
-                        )
-                    case "cdc16" =>
-                        new RabinChunker(
-                          4 * 1024,
-                          16 * 1024,
-                          64 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c16"
-                        )
-                    case "cdc32" =>
-                        new RabinChunker(
-                          8 * 1024,
-                          32 * 1024,
-                          128 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c32"
-                        )
-                    case "cdc64" =>
-                        new RabinChunker(
-                          16 * 1024,
-                          64 * 1024,
-                          256 * 1024,
-                          logChunkHashes,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "c64"
-                        )
-
-                    case "fixed2" =>
-                        new FixedChunker(
-                          2 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f2"
-                        )
-                    case "fixed4" =>
-                        new FixedChunker(
-                          4 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f4"
-                        )
-                    case "fixed8" =>
-                        new FixedChunker(
-                          8 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f8"
-                        )
-                    case "fixed16" =>
-                        new FixedChunker(
-                          16 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f16"
-                        )
-                    case "fixed32" =>
-                        new FixedChunker(
-                          32 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f32"
-                        )
-                    case "fixed64" =>
-                        new FixedChunker(
-                          64 * 1024,
-                          new DigestFactory(
-                            digestType,
-                            digestLength,
-                            optionSalt.value
-                          ),
-                          "f64"
-                        )
-                }
-                logger.debug("Found chunker " + chunkerName)
-                (c, handler)
-            }
-
-            val chunker = if (optionChunkerNames.value.size > 0) {
-                for {
-                    chunkerName <- optionChunkerNames.value
-                } yield getChunker(chunkerName)
-            } else {
-                for { chunkerName <- List("cdc8") } yield getChunker(
-                  chunkerName
-                )
-            }
-            val listing = optionListing.value match {
-                case Some(b) => b
-                case None    => false
-            }
-            val filenames = if (
-              optionFilenames.value.isEmpty && parameterFilenames.value.isEmpty
-            ) {
-                parser.usage("Provide at least one trace file")
-            } else if (
-              !optionFilenames.value.isEmpty && !parameterFilenames.value.isEmpty
-            ) {
-                parser.usage(
-                  "Provide files by -f (deprecated) or by positional parameter, but not both"
-                )
-            } else if (!optionFilenames.value.isEmpty) {
-                optionFilenames.value.toList
-            } else {
-                parameterFilenames.value.toList
-            }
-            val fileListing: FileListingProvider = if (listing) {
-                FileListingProvider.fromListingFile(
-                  filenames,
-                  optionLabel.value
-                )
-            } else {
-                FileListingProvider.fromDirectFile(filenames, optionLabel.value)
-            }
-            val progressHandler = optionProgressFile.value match {
-                case Some(filename) =>
-                    val outputFilename = if (distributedMode) {
-                        val memberId = Hazelcast
-                            .getCluster()
-                            .getLocalMember()
-                            .getInetSocketAddress()
-                            .getHostName()
-                        "%s-%s".format(filename, memberId)
-                    } else {
-                        filename
-                    }
-                    val ph = new FileProgressHandler(filename)
-                    ph.progress _
-                case None =>
-                    def dummyProgressHandler(
-                        f: de.pc2.dedup.chunker.File
-                    ): Unit = {
-                        // empty
-                    }
-                    dummyProgressHandler _
-            }
-
-            val chunking = new FileSystemChunking(
-              fileListing,
-              chunker,
-              threadCount,
-              useIgnoreList,
-              followSymlinks,
-              useRelativePaths,
-              useJavaDirectoryListing,
-              distributedMode,
-              progressHandler
-            )
-            val reporter = new Reporter(chunking, reportInterval).start()
-
-            val memoryUsageReporter = if (reportMemoryUsage) {
-                Some(new Reporter(new GCReporting(), reportInterval).start())
-            } else {
-                None
-            }
-
-            chunking.start()
-            reporter.quit()
-
-            memoryUsageReporter match {
-                case Some(r) => r.quit()
-                case None    => // pass
-            }
-
-            chunking.report()
-            chunking.quit()
-        } catch {
-            case e: SystemExitException => System.exit(1)
         }
+
+        val config: TraceConfig =
+            OParser.parse(parser, args, TraceConfig()) match {
+                case Some(c) => c
+                case _       => sys.exit(1)
+            }
+
+        val format = "protobuf"
+
+        def getHandler(chunkerName: String): List[FileDataHandler] = {
+            val handler = config.output match {
+                case None =>
+                    config.customHandler match {
+                        case Some(className) =>
+                            try {
+                                val customHandler = Class
+                                    .forName(className)
+                                    .getDeclaredConstructor()
+                                    .newInstance()
+                                    .asInstanceOf[FileDataHandler]
+                                customHandler :: Nil
+                            } catch {
+                                case e: Exception =>
+                                    throw new Exception(
+                                      "Failed to instanciate the provided chunk handler %s: %s"
+                                          .format(className, e)
+                                    )
+                            }
+                        case None =>
+                            new InMemoryChunkHandler(
+                              config.silent,
+                              new ChunkIndex,
+                              Some(chunkerName)
+                            ) :: Nil
+                    }
+                case Some(o) =>
+                    config.customHandler match {
+                        case Some(className) =>
+                            throw new Exception(
+                              "Cannot use custom chunk handler with output option"
+                            )
+                        case None => // ok
+                    }
+                    val outputFile = if (config.distributed) {
+                        val hcInstance: HazelcastInstance =
+                            Hazelcast.newHazelcastInstance()
+                        val memberID =
+                            hcInstance.getCluster.getLocalMember.getSocketAddress.getHostName
+                        "%s-%s-%s".format(o, config.chunkerNames, memberID)
+                    } else {
+                        "%s-%s".format(o, config.chunkerNames)
+                    }
+                    Format(format).createWriter(
+                      outputFile,
+                      config.privacyMode
+                    ) :: Nil
+            }
+            handler
+        }
+        val chunkers = for {
+            chunkerName <- config.chunkerNames
+        } yield (
+          ChunkerFactory.createChunker(
+            chunkerName,
+            config.logChunkHashes,
+            config.digestType,
+            config.digestLength,
+            config.salt
+          ),
+          getHandler(chunkerName)
+        )
+
+        val fileListing: FileListingProvider = if (config.listing) {
+            FileListingProvider.fromListingFile(config.filenames, config.label)
+        } else {
+            FileListingProvider.fromDirectFile(config.filenames, config.label)
+        }
+
+        val progressHandler = config.progressFile match {
+            case Some(filename) =>
+                val outputFilename = if (config.distributed) {
+                    val hcInstance: HazelcastInstance =
+                        Hazelcast.newHazelcastInstance()
+                    val memberID = Hazelcast
+                        .newHazelcastInstance()
+                        .getCluster
+                        .getLocalMember
+                        .getSocketAddress
+                        .getHostName
+                    "%s-%s".format(filename, memberID)
+                } else {
+                    filename
+                }
+                val fileProgressHandler = new FileProgressHandler(
+                  filename.toString
+                )
+                fileProgressHandler.progress
+            case None =>
+                def dummyProgressHandler(
+                    f: de.pc2.dedup.chunker.File
+                ): Unit = {}
+                dummyProgressHandler
+        }
+
+        val chunkingPipeline = new FileSystemChunking(
+          fileListings = fileListing,
+          chunkers = chunkers,
+          threads = config.threads,
+          useDefaultIgnores = config.useDefaultIgnores,
+          followSymlinks = config.followSymlinks,
+          useRelativePaths = config.relativePaths,
+          useJavaDirectoryListing = config.useJavaDirectoryListing,
+          clustered = config.distributed,
+          progressHandler = progressHandler
+        )
+        val reporter =
+            new Reporter(chunkingPipeline, config.reportInterval).start()
+        val memoryReporter = if (config.memoryReporting) {
+            Some(new Reporter(new GCReporting(), config.reportInterval).start())
+        } else { None }
+
+        chunkingPipeline.start()
+        reporter.quit()
+        memoryReporter match {
+            case Some(r) => r.quit()
+            case None    => // pass
+        }
+        chunkingPipeline.report()
+        chunkingPipeline.quit()
     }
 }

@@ -38,18 +38,16 @@ class ZeroChunkDeduplicationHandler() extends FileDataHandler with Log {
           "c8"
         )
         val rcs = rc.createSession()
-        rcs.chunk(bb) {
-            c: Chunk =>
+        rcs.chunk(bb) { (c: Chunk) =>
+            if (chunk == null) {
+                chunk = c
+            }
+        }
+        if (chunk == null) {
+            rcs.close() { (c: Chunk) =>
                 if (chunk == null) {
                     chunk = c
                 }
-        }
-        if (chunk == null) {
-            rcs.close() {
-                c: Chunk =>
-                    if (chunk == null) {
-                        chunk = c
-                    }
             }
         }
         chunk.fp

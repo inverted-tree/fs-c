@@ -47,7 +47,7 @@ class HarnikEstimationSamplingHandler(
     var processedChunkCount: Long = 0
     var processedDataCount: Long = 0
 
-    lazy val estimationSample: HarnikEstimationSample = getEstimationSample()
+    lazy val estimationSample: HarnikEstimationSample = getEstimationSample
 
     private def getEstimationSample: HarnikEstimationSample = {
 

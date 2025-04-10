@@ -1,10 +1,10 @@
 package de.pc2.dedup.fschunk.handler.gp
 
+import scopt.OParser
+
 import java.io.BufferedWriter
 import java.io.FileWriter
 import org.apache.commons.codec.binary.Base64
-import org.clapper.argot.ArgotParser
-import org.clapper.argot.ArgotConverters
 import de.pc2.dedup.chunker.Chunk
 import de.pc2.dedup.chunker.File
 import de.pc2.dedup.chunker.FilePart
@@ -65,68 +65,70 @@ class GPImportHandler(output: String) extends FileDataHandler with Log {
     }
 }
 
+case class GPImportConfig(
+    format: String = "protobuf",
+    outputFile: Option[String] = None,
+    report: Integer = 60,
+    filenames: Seq[String] = Seq()
+)
+
 object GPImport {
     def main(args: Array[String]): Unit = {
-        import ArgotConverters._
+        import builder._
 
-        val parser =
-            new ArgotParser("fs-c gpimport", preUsage = Some("Version 0.3.14"))
-        val optionFormat = parser.option[String](
-          List("format"),
-          "trace file format",
-          "Trace file format (expert)"
-        )
-        val optionOutput = parser
-            .option[String](List("o", "output"), "output", "Output file prefix")
-        val optionReport = parser.option[Int](
-          List("r", "report"),
-          "report",
-          "Interval between progess reports in seconds (Default: 1 minute, 0 = no report)"
-        )
-        val parameterFilenames = parser.multiParameter[String](
-          "input filenames",
-          "Input trace files files to parse",
-          true
-        ) { (s, opt) =>
-            val file = new java.io.File(s)
-            if (!file.exists) {
-                parser.usage("Input file \"" + s + "\" does not exist.")
+        val builder = OParser.builder[GPImportConfig]
+
+        val parser = {
+            import builder._
+            OParser.sequence(
+              programName("fs-c gpimport"),
+              head("fs-c", "0.4.0"),
+              opt[String]("format")
+                  .valueName("<trace file format>")
+                  .action((x, c) =>
+                      if (Format.isFormat(x)) {
+                          c.copy(x)
+                      } else {
+                          println("Invalid fsf-c file format")
+                          sys.exit(1)
+                      }
+                  )
+                  .text("Trace file format"),
+              opt[String]('o', "output")
+                  .valueName("<file>")
+                  .action((x, c) => c.copy(outputFile = Some(x)))
+                  .text("Output file")
+                  .required(),
+              opt[Int]('r', "report")
+                  .valueName("<seconds>")
+                  .action((x, c) => c.copy(report = x))
+                  .text("Interval between progress reports (default = 60)"),
+              arg[Seq[String]]("Input Files")
+                  .valueName("<file1>,<file2>,...")
+                  .action((x, c) => c.copy(filenames = x))
+                  .text("Trace files to be parsed")
+            )
+        }
+
+        val config: GPImportConfig =
+            OParser.parse(parser, args, GPImportConfig()) match {
+                case Some(c) => c
+                case _       => sys.exit(1)
             }
-            s
-        }
-        parser.parse(args)
 
-        val output = optionOutput.value match {
-            case Some(f) => f
-            case None    => throw new Exception("--output has to be configured")
-        }
-        val reportInterval = optionReport.value
-        val format = optionFormat.value match {
-            case Some(s) =>
-                if (!Format.isFormat(s)) {
-                    parser.usage("Invalid fs-c file format")
-                }
-                s
-            case None => "protobuf"
-        }
-        if (parameterFilenames.value.size == 0) {
-            throw new Exception("Provide at least one file as parameter")
-        }
-        val filenames = parameterFilenames.value.toList
-
-        val importHandler = new GPImportHandler(output)
+        val importHandler = new GPImportHandler(config.outputFile.get)
         val handlerList = List(importHandler, new StandardReportingHandler())
 
-        for (filename <- filenames) {
-            val p = new Parser(filename, format, handlerList)
-            val reporter = new Reporter(p, reportInterval).start()
+        for (filename <- config.filenames) {
+            val p = new Parser(filename, config.format, handlerList)
+            val reporter = new Reporter(p, config.report).start()
+
             p.parse()
             reporter.quit()
         }
 
-        for { handler <- handlerList } {
+        for (handler <- handlerList) {
             handler.quit()
         }
-
     }
 }

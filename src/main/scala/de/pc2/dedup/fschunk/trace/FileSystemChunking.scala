@@ -11,9 +11,9 @@ import de.pc2.dedup.util.Log
 /** Main tracing class
   */
 class FileSystemChunking(
-    listing: FileListingProvider,
-    chunker: Seq[(Chunker, List[FileDataHandler])],
-    maxThreads: Int,
+    fileListings: FileListingProvider,
+    chunkers: Seq[(Chunker, List[FileDataHandler])],
+    threads: Int,
     useDefaultIgnores: Boolean,
     followSymlinks: Boolean,
     useRelativePaths: Boolean,
@@ -25,11 +25,11 @@ class FileSystemChunking(
 
     /** Dispatching object
       */
-    val dispatcher: FileDispatcher with Log =
+    val dispatcher: FileDispatcher & Log =
         if (clustered)
             new DistributedFileDispatcher(
-              maxThreads,
-              chunker,
+              threads,
+              chunkers,
               useDefaultIgnores,
               followSymlinks,
               useRelativePaths,
@@ -38,8 +38,8 @@ class FileSystemChunking(
             )
         else
             new ThreadPoolFileDispatcher(
-              maxThreads,
-              chunker,
+              threads,
+              chunkers,
               useDefaultIgnores,
               followSymlinks,
               useRelativePaths,
@@ -49,7 +49,7 @@ class FileSystemChunking(
 
     def report(): Unit = {
         dispatcher.report()
-        for ((_, handlers) <- chunker) {
+        for ((_, handlers) <- chunkers) {
             handlers.foreach(h => h.report())
         }
     }
@@ -57,40 +57,39 @@ class FileSystemChunking(
     logger.debug("Start chunking")
 
     // Append all files from listing to directory processor
-    if (dispatcher.isLeader()) {
-        for (fl <- listing) {
-            val f = getFile(fl.filename)
+    if (dispatcher.isLeader) {
+        for (listing <- fileListings) {
+            val file = getFile(listing.filename)
             dispatcher.dispatch(
-              f,
-              f.getCanonicalPath,
-              f.isDirectory,
-              fl.source,
-              fl.label
+              file,
+              file.getCanonicalPath,
+              file.isDirectory,
+              listing.source,
+              listing.label
             )
         }
-    }
-
-    def quit(): Unit = {
-        dispatcher.quit()
     }
 
     def start(): Unit = {
         dispatcher.waitUntilFinished()
         logger.info("Tracing finished")
 
-        for ((_, handlers) <- chunker) {
+        for ((_, handlers) <- chunkers) {
             handlers.foreach(h => h.quit())
         }
     }
+
+    def quit(): Unit = dispatcher.quit()
 
     private def getFile(filename: String): File = {
         if (filename.equals(".")) {
             try {
                 new File(filename).getCanonicalFile
             } catch {
-                case e: IOException =>
-                    new File(filename)
+                case _: IOException => new File(filename)
             }
-        } else new File(filename)
+        } else {
+            new File(filename)
+        }
     }
 }

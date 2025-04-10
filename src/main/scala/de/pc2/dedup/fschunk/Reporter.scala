@@ -47,21 +47,15 @@ class ReporterRunnable(r: Reporting) extends Runnable {
 /** Actor that in certain intervals calls report on the reporting object until a
   * Quit message is received
   */
-class Reporter(r: Reporting, reportInterval: Option[Int]) extends Log {
+class Reporter(r: Reporting, reportInterval: Int) extends Log {
     val tp: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
 
     def start(): Reporter = {
-        val interval = reportInterval match {
-            case None =>
-                60
-            case Some(i) =>
-                i
-        }
-        if (interval > 0) {
+        if (reportInterval > 0) {
             tp.scheduleAtFixedRate(
               new ReporterRunnable(r),
               1,
-              interval,
+              reportInterval,
               TimeUnit.SECONDS
             )
         }

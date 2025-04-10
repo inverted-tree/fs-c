@@ -36,7 +36,6 @@ object PolynomUtil {
             if (testBit(hi_, i)) {
                 hi_ ^= p >> (63 - i)
                 lo_ ^= p << (i + 1)
-                0
             }
         }
         if (testBit(lo_, 63)) {

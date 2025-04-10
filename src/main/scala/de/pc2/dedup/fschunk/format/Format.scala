@@ -56,7 +56,7 @@ trait Format {
         createWriter(new FileOutputStream(filename), privacyMode)
 
     def createWriter(file: OutputStream): FileDataHandler =
-        createWriter(file, PrivacyMode.NoPrivacy)
+        createWriter(file, PrivacyMode.None)
 
     def createReader(file: InputStream, receiver: FileDataHandler): Reader
 

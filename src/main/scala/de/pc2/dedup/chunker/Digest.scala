@@ -23,7 +23,7 @@ class DigestFactory(
 
     /** Tests if the digest type is valid
       */
-    def testDigestType(): Unit = {
+    private def testDigestType(): Unit = {
         try {
             val md = MessageDigest.getInstance(digestType)
             if (digestLength > md.getDigestLength) {
@@ -32,7 +32,7 @@ class DigestFactory(
                 )
             }
         } catch {
-            case e: NoSuchAlgorithmException =>
+            case _: NoSuchAlgorithmException =>
                 throw new IllegalArgumentException("Digest type not known");
         }
     }
@@ -49,14 +49,14 @@ class DigestFactory(
             if (len > 0) {
                 md.update(buf, pos, len)
             }
-            return this
+            this
         }
 
         /** Append new bytes from a ByteBuffer to the current DigestBuilder
           */
         def append(buf: ByteBuffer): DigestBuilder = {
             md.update(buf)
-            return this
+            this
         }
 
         /** Create a new Digest from the current data and reset the
@@ -77,15 +77,13 @@ class DigestFactory(
             }
             md.reset()
 
-            return new Digest(digest)
+            Digest(digest)
         }
     }
 
     /** Creates a new DigestBuilder
       */
-    def builder(): DigestBuilder = {
-        return new DigestBuilder()
-    }
+    def builder(): DigestBuilder = new DigestBuilder()
 }
 
 /** Fingerprint of a chunk or a file. The reason not to use a ByteArray directly
@@ -95,7 +93,7 @@ case class Digest(digest: Array[Byte]) {
 
     /** Hashcode of the digest. Calls Arrays.hashCode()
       */
-    override def hashCode: Int = return util.Arrays.hashCode(digest)
+    override def hashCode: Int = util.Arrays.hashCode(digest)
 
     /** Checks if two digests are equal. Calls Array.equals()
       */

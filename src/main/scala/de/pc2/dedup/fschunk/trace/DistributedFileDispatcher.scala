@@ -1,14 +1,12 @@
 package de.pc2.dedup.fschunk.trace
 
+import com.hazelcast.config.{Config, ExecutorConfig}
+
 import java.io.File
-import java.lang.{Integer => Int}
-import java.util.concurrent.{ExecutorService, Future}
-import com.hazelcast.core.{
-    AtomicNumber,
-    DistributedTask,
-    ExecutionCallback,
-    Hazelcast
-}
+import java.lang.Integer as Int
+import java.util.concurrent.Future
+import com.hazelcast.core.{ExecutionCallback, Hazelcast, HazelcastInstance}
+import com.hazelcast.cp.IAtomicLong
 import de.pc2.dedup.chunker.Chunker
 import de.pc2.dedup.fschunk.handler.FileDataHandler
 import de.pc2.dedup.util.Log
@@ -30,49 +28,49 @@ class DistributedFileDispatcher(
     var lock: AnyRef = new Object()
     var finished: Boolean = false
 
-    val activeAllCount: AtomicNumber = Hazelcast.getAtomicNumber("all count")
-    val activeDirCount: AtomicNumber = Hazelcast.getAtomicNumber("dir count")
-    val activeFileCount: AtomicNumber = Hazelcast.getAtomicNumber("file count")
+    private val hcInstance: HazelcastInstance = Hazelcast.newHazelcastInstance()
+    val activeAllCount: IAtomicLong =
+        hcInstance.getCPSubsystem.getAtomicLong("all count")
+    val activeDirCount: IAtomicLong =
+        hcInstance.getCPSubsystem.getAtomicLong("dir count")
+    val activeFileCount: IAtomicLong =
+        hcInstance.getCPSubsystem.getAtomicLong("file count")
 
-    /** Id of the instance. Is used for determining an initial leader
+    /** id of the instance. Is used for determining a initial leader
       */
-    val id: Long = Hazelcast.getAtomicNumber("id").incrementAndGet()
+    val id: Long =
+        hcInstance.getCPSubsystem.getAtomicLong("id").incrementAndGet()
 
     /** true iff the executor service should be shut down.
       */
     private def shouldShutdown: Boolean = {
-        return activeAllCount.get() == 0
+        activeAllCount.get() == 0
     }
 
     /** Adapts the Hazelcast configuration
       */
     private def adaptExecutorConfiguration(): Unit = {
-        val config = Hazelcast.getConfig()
-        config.getExecutorConfig("file").setCorePoolSize(processorNum)
-        config.getExecutorConfig("file").setMaxPoolSize(processorNum)
-        config.getExecutorConfig("dir").setCorePoolSize(2)
-        config.getExecutorConfig("dir").setMaxPoolSize(2)
+        val config: Config = new Config()
+        config.getExecutorConfig("file").setPoolSize(processorNum)
+        config.getExecutorConfig("dir").setPoolSize(2)
     }
 
     adaptExecutorConfiguration()
-    val fileExecutor: ExecutorService = Hazelcast.getExecutorService("file")
-    val dirExecutor: ExecutorService = Hazelcast.getExecutorService("dir")
+    private val fileExecutor = hcInstance.getExecutorService("file")
+    private val dirExecutor = hcInstance.getExecutorService("dir")
 
     FileProcessor.init(chunker, progressHandler, useRelativePaths)
     DirectoryProcessor.init(this, useJavaDirectoryListing)
 
     /** Human readable member id aka hostname
       */
-    val memberId: String = Hazelcast
-        .getCluster()
-        .getLocalMember()
-        .getInetSocketAddress()
-        .getHostName()
+    private val memberId =
+        hcInstance.getCluster.getLocalMember.getSocketAddress.getHostName
 
-    logger.info("%s: cluster id %s, leader %s".format(memberId, id, isLeader()))
+    logger.info("%s: cluster id %s, leader %s".format(memberId, id, isLeader))
 
-    override def isLeader(): Boolean = {
-        return (id == 1)
+    override def isLeader: Boolean = {
+        id == 1
     }
 
     /** Dispatch the given file to the correct executor service
@@ -108,13 +106,14 @@ class DistributedFileDispatcher(
             2
         }
 
-        // create a distributed task instance
-        val task = new DistributedTask[Int](runnable, taskTypeId);
-        task.setExecutionCallback(new ExecutionCallback[Int]() {
-            def done(future: Future[Int]): Unit = {
+        /////////////
+
+        val future: ExecutionCallback[Int] = new ExecutionCallback[Int] {
+
+            override def onResponse(response: Int): Unit = {
                 logger.debug("Task finished")
 
-                val taskTypeId = future.get()
+                val taskTypeId = response
                 if (taskTypeId == 1) {
                     activeDirCount.decrementAndGet()
                 } else {
@@ -125,13 +124,39 @@ class DistributedFileDispatcher(
                     executorFinished()
                 }
             }
-        });
+
+            override def onFailure(t: Throwable): Unit = {
+                logger.error("Task failed", t)
+            }
+        }
+        ///////////
+
+        // create a distributed task instance
+//        val task = new DistributedTask[Int](runnable, taskTypeId);
+//        task.setExecutionCallback(new ExecutionCallback[Int]() {
+//            def done(future: Future[Int]): Unit = {
+//                logger.debug("Task finished")
+//
+//                val taskTypeId = future.get()
+//                if (taskTypeId == 1) {
+//                    activeDirCount.decrementAndGet()
+//                } else {
+//                    activeFileCount.decrementAndGet()
+//                }
+//                activeAllCount.decrementAndGet()
+//                if (shouldShutdown) {
+//                    executorFinished()
+//                }
+//            }
+//        });
 
         logger.debug("Task sent to executor: %s".format(f))
         if (isDir) {
-            dirExecutor.execute(task)
+            dirExecutor.submit[Int](runnable, future)
+//            dirExecutor.execute(task)
         } else {
-            fileExecutor.execute(task)
+            fileExecutor.submit[Int](runnable, future)
+//            fileExecutor.execute(task)
         }
     }
 
@@ -168,7 +193,7 @@ class DistributedFileDispatcher(
     /** Report the current state of the dispatcher to the user
       */
     def report(): Unit = {
-        val secs = ((System.currentTimeMillis() - startTime) / 1000)
+        val secs = (System.currentTimeMillis() - startTime) / 1000
         if (secs > 0) {
             val mbs = FileProcessor.totalRead.get() / secs
             logger.info(

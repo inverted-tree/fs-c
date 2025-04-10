@@ -1,7 +1,6 @@
 package de.pc2.dedup.fschunk.handler
 
-import org.clapper.argot.ArgotParser
-import org.clapper.argot.ArgotConverters
+import scopt.OParser
 
 import de.pc2.dedup.chunker.File
 import de.pc2.dedup.chunker.FilePart
@@ -60,75 +59,57 @@ class ValidateHandler() extends Reporting with FileDataHandler with Log {
     }
 }
 
+case class ValidationConfig(
+    format: String = "protobuf",
+    reportInterval: Int = 60,
+    filenames: Seq[String] = Seq()
+)
+
 object Validate {
     def main(args: Array[String]): Unit = {
-        import ArgotConverters._
-
-        val parser =
-            new ArgotParser("fs-c validate", preUsage = Some("Version 0.3.14"))
-        val optionFormat = parser.option[String](
-          List("format"),
-          "trace file format",
-          "Trace file format (expert)"
-        )
-        val optionFilenames = parser.multiOption[String](
-          List("f", "filename"),
-          "filenames",
-          "Filename to parse (deprecated)"
-        )
-        val optionReport = parser.option[Int](
-          List("r", "report"),
-          "report",
-          "Interval between progess reports in seconds (Default: 1 minute, 0 = no report)"
-        )
-        val parameterFilenames = parser.multiParameter[String](
-          "input filenames",
-          "Input trace files files to parse",
-          true
-        ) { (s, opt) =>
-            val file = new java.io.File(s)
-            if (!file.exists) {
-                parser.usage("Input file \"" + s + "\" does not exist.")
-            }
-            s
-        }
-        parser.parse(args)
-
-        val reportInterval = optionReport.value
-        val format = optionFormat.value match {
-            case Some(s) =>
-                if (!Format.isFormat(s)) {
-                    parser.usage("Invalid fs-c file format")
-                }
-                s
-            case None => "protobuf"
+        val builder = OParser.builder[ValidationConfig]
+        val parser = {
+            import builder._
+            OParser.sequence(
+              programName("fs-c validate"),
+              head("fs-c", "0.4.0"),
+              opt[String]("format")
+                  .valueName("<trace file format>")
+                  .action((x, c) =>
+                      if (Format.isFormat(x)) {
+                          c.copy(x)
+                      } else {
+                          println("Invalid fsf-c file format")
+                          sys.exit(1)
+                      }
+                  )
+                  .text("Trace file format"),
+              opt[Int]('r', "report")
+                  .valueName("<seconds>")
+                  .action((x, c) => c.copy(reportInterval = x))
+                  .text("Interval between progress reports (default = 60"),
+              arg[Seq[String]]("Input Files")
+                  .valueName("<file1>,<file2>,...")
+                  .action((x, c) => c.copy(filenames = x))
+                  .text("Trace files to be parsed")
+            )
         }
 
-        val filenames =
-            if (
-              optionFilenames.value.isEmpty && parameterFilenames.value.isEmpty
-            ) {
-                parser.usage("Provide at least one trace file")
-            } else if (
-              !optionFilenames.value.isEmpty && !parameterFilenames.value.isEmpty
-            ) {
-                parser.usage(
-                  "Provide files by -f (deprecated) or by positional parameter, but not both"
-                )
-            } else if (!optionFilenames.value.isEmpty) {
-                optionFilenames.value.toList
-            } else {
-                parameterFilenames.value.toList
+        val config: ValidationConfig =
+            OParser.parse(parser, args, ValidationConfig()) match {
+                case Some(c) => c
+                case _       => sys.exit(1)
             }
 
-        for (filename <- filenames) {
-            val validateHandler = new ValidateHandler()
-            val reader = Format(format).createReader(filename, validateHandler)
-            val reporter = new Reporter(validateHandler, reportInterval).start()
+        for (file <- config.filenames) {
+            val handler = new ValidateHandler()
+            val reader =
+                Format(config.format).createReader(file, handler)
+            val reporter = new Reporter(handler, config.reportInterval).start()
+
             reader.parse()
-
             reporter.quit()
-            validateHandler.quit()
+            handler.quit()
         }
     }
 }

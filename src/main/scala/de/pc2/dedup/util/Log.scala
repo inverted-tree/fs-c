@@ -2,8 +2,6 @@ package de.pc2.dedup.util
 
 import org.apache.commons.logging._
 
-/** I like Scala
-  */
 class LoggerProxy(val logger: org.apache.commons.logging.Log) {
     def debug(msg: => Object): Unit = {
         if (logger.isDebugEnabled) {
@@ -44,14 +42,14 @@ class LoggerProxy(val logger: org.apache.commons.logging.Log) {
     }
 }
 
-/** Logging Helper trait see: Blog Post by Sean Hunter,
-  * http://www.uncarved.com/blog/LogHelper.mrk
+/** Provides easy log4j logging for scala classes. Based on this article:
+  * https://www.uncarved.com/articles/LogHelper/
   */
 trait Log {
-    val loggerName = getLoggerName()
+    val loggerName: String = getLoggerName
     lazy val logger = new LoggerProxy(LogFactory.getLog(loggerName))
 
-    def getLoggerName(): String = {
+    private def getLoggerName: String = {
         val name = this.getClass.getName
         val i = name.indexOf("$")
         val name2 = if (i >= 0) {

@@ -40,13 +40,13 @@ object FileListingProvider {
     /** Create a listing provied from a direct file.
       */
     def fromDirectFile(
-        filenames: Seq[String],
+        filenames: Seq[File],
         label: Option[String]
     ): FileListingProvider = {
         class DirectFileProvider extends FileListingProvider {
             def foreach(f: (FilenameLabel) => Unit): Unit = {
                 filenames.foreach(filename =>
-                    g(filename, Some(filename), label, f)
+                    g(filename.toString, Some(filename.toString), label, f)
                 )
             }
         }
@@ -56,13 +56,13 @@ object FileListingProvider {
     /** Create a listing provider for a listing file
       */
     def fromListingFile(
-        filenames: Seq[String],
+        filenames: Seq[File],
         defaultLabel: Option[String]
     ): FileListingProvider = {
         class ListingFileProvider extends FileListingProvider {
             var reader: BufferedReader = null;
             var queue = new ListBuffer[FilenameLabel]()
-            filenames.foreach(f => appendFile(f))
+            filenames.foreach(f => appendFile(f.toString))
             def appendFile(f: String): Unit = {
                 try {
                     reader = new BufferedReader(new FileReader(f))

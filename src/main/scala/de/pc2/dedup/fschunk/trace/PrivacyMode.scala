@@ -1,39 +1,36 @@
 package de.pc2.dedup.fschunk.trace
+
+import de.pc2.dedup.fschunk.trace
 import org.apache.commons.codec.digest.DigestUtils
 
 trait PrivacyMode {
-    /* encodes a filename to the output privacy-preserving filename (or outputs the original filename directory for
-     * no privacy)
+    /* Encodes a filename to a privacy-preserving hash
      */
-    def encodeFilename(filename: String): String
+    def encodeFilename(file: String): String
 }
 
 /** Enumeration for the trace privacy mode
-  *   - NoPrivacy: Emits full path
-  *   - FlatDefault: Revertible full path hashing
-  *   - FlatSHA1: SHA-1 full path hashing
-  *   - DirectorySHA-1: Directory-level based SHA-1
+  *   - None: Emits the full path
+  *   - Reversible: Emits a reversibly hashed full path
+  *   - Hash: SHA-1 full path hashing
+  *   - DirHash: Directory-level based SHA-1
   */
 object PrivacyMode extends Enumeration {
-    object FlatDefault extends PrivacyMode {
-        def encodeFilename(filename: String): String = {
-            "" + filename.hashCode
-        }
+    object None extends PrivacyMode {
+        def encodeFilename(file: String): String = file
     }
 
-    object FlatSHA1 extends PrivacyMode {
-        def encodeFilename(filename: String): String = {
-            DigestUtils.shaHex(filename)
-        }
+    object Reversible extends PrivacyMode {
+        def encodeFilename(file: String): String = file.hashCode.toString
     }
 
-    object NoPrivacy extends PrivacyMode {
-        def encodeFilename(filename: String): String = filename
+    object Hash extends PrivacyMode {
+        def encodeFilename(file: String): String =
+            DigestUtils.sha1Hex(file)
     }
 
-    object DirectorySHA1 extends PrivacyMode {
-        def encodeFilename(filename: String): String = {
-            filename.split("/").map(DigestUtils.sha1Hex).mkString("/")
-        }
+    object DirHash extends PrivacyMode {
+        def encodeFilename(file: String): String =
+            file.split("/").map(DigestUtils.sha1Hex).mkString("/")
     }
 }

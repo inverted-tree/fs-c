@@ -1,5 +1,7 @@
 package de.pc2.dedup.fschunk.handler.hadoop
 
+import scopt.OParser
+
 import java.io.FileInputStream
 import java.io.OutputStream
 import java.io.OutputStreamWriter
@@ -19,8 +21,6 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.FileSystem
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.compress.BZip2Codec
-import org.clapper.argot.ArgotParser
-import org.clapper.argot.ArgotConverters
 import de.pc2.dedup.chunker.Chunk
 import de.pc2.dedup.chunker.File
 import de.pc2.dedup.chunker.FilePart
@@ -32,6 +32,7 @@ import de.pc2.dedup.util.Log
 import de.pc2.dedup.util.StorageUnit
 
 import scala.collection.mutable
+import scala.collection.mutable.Buffer
 
 class FileManager(
     fs: FileSystem,
@@ -47,8 +48,8 @@ class FileManager(
         }
     }
 
-    def files: mutable.Seq[Writer] = ListBuffer[Writer]()
-    def streams = ListBuffer[OutputStream]()
+    val files: mutable.Buffer[Writer] = mutable.ListBuffer[Writer]()
+    val streams = mutable.ListBuffer[OutputStream]()
     val uniqueId = new AtomicInteger(0);
     val threadLocalFile =
         new ThreadLocal[Writer]() {
@@ -67,7 +68,8 @@ class FileManager(
                 streams += stream
                 val writer = new OutputStreamWriter(stream)
                 files += writer
-                return writer
+
+                writer
             }
         }
 
@@ -302,120 +304,89 @@ class ImportHandler(
     }
 }
 
+case class ImportConfig(
+    filenames: Seq[String] = Seq(),
+    report: Int = 60,
+    output: Option[String] = None,
+    fileFingerprint: Boolean = false,
+    compress: Boolean = false,
+    threads: Int = 1,
+    format: String = "protobuf"
+)
+
 object Import {
     def main(args: Array[String]): Unit = {
-        import ArgotConverters._
 
-        val parser =
-            new ArgotParser("fs-c import", preUsage = Some("Version 0.3.14"))
-        val optionFilenames = parser.multiOption[String](
-          List("f", "filename"),
-          "filenames",
-          "Filename to parse (deprecated)"
-        )
-        val optionReport = parser.option[Int](
-          List("r", "report"),
-          "report",
-          "Interval between progress reports in seconds (Default: 1 minute, 0 = no report)"
-        )
-        val optionOutput = parser.option[String](
-          List("o", "output"),
-          "output",
-          "HDFS directory for output"
-        )
-        val optionWithFileFingerprint = parser.flag[Boolean](
-          List("with-file-fingerprint"),
-          "Import with file fingerprint"
-        )
-        val optionCompress =
-            parser.flag[Boolean](List("c", "compress"), "Compress output")
-        val optionThreads = parser.option[Int](
-          List("t", "threads"),
-          "threads",
-          "number of concurrent threads"
-        )
-        val optionFormat = parser.option[String](
-          List("format"),
-          "trace file format",
-          "Trace file format (expert)"
-        )
-        val parameterFilenames = parser.multiParameter[String](
-          "input filenames",
-          "Input trace files files to parse",
-          true
-        ) { (s, opt) =>
-            val file = new java.io.File(s)
-            if (!file.exists) {
-                parser.usage("Input file \"" + s + "\" does not exist.")
+        val builder = OParser.builder[ImportConfig]
+        val parser = {
+            import builder._
+            OParser.sequence(
+              programName("fs-c import"),
+              head("fs-c", "0.4.0"),
+              opt[Int]('r', "report")
+                  .valueName("<seconds>")
+                  .action((x, c) => c.copy(report = x))
+                  .text("Interval between progress reports (default=60)"),
+              opt[String]('o', "output")
+                  .valueName("<dir>")
+                  .action((x, c) => c.copy(output = Some(x)))
+                  .text("HDFS directory for output")
+                  .required(),
+              opt[Boolean]("file-fingerprint")
+                  .action((_, c) => c.copy(fileFingerprint = true))
+                  .text("Import with file fingerprints"),
+              opt[Boolean]("compress")
+                  .action((_, c) => c.copy(compress = true))
+                  .text("Compress the output"),
+              opt[Int]('j', "jobs")
+                  .valueName("<jobs>")
+                  .action((x, c) => c.copy(threads = x))
+                  .text("Number of concurrent jobs"),
+              opt[String]("format")
+                  .valueName("<trace file format>")
+                  .action((x, c) =>
+                      if (Format.isFormat(x)) {
+                          c.copy(format = x)
+                      } else {
+                          println("Invalid fsf-c file format")
+                          sys.exit(1)
+                      }
+                  )
+                  .text("Trace file format"),
+              arg[Seq[String]]("Input Filenames")
+                  .valueName("<file1>,<file2>,...")
+                  .action((x, c) => c.copy(filenames = x))
+                  .text("Input trace files to parse")
+            )
+        }
+
+        val config: ImportConfig =
+            OParser.parse(parser, args, ImportConfig()) match {
+                case Some(c) => c
+                case _       => sys.exit(1)
             }
-            s
-        }
-        parser.parse(args)
 
-        val reportInterval = optionReport.value
-        val threadCount = optionThreads.value match {
-            case Some(t) => t
-            case None    => 0
-        }
-        val filenames =
-            if (
-              optionFilenames.value.isEmpty && parameterFilenames.value.isEmpty
-            ) {
-                parser.usage("Provide at least one trace file")
-            } else if (
-              !optionFilenames.value.isEmpty && !parameterFilenames.value.isEmpty
-            ) {
-                parser.usage(
-                  "Provide files by -f (deprecated) or by positional parameter, but not both"
-                )
-            } else if (!optionFilenames.value.isEmpty) {
-                optionFilenames.value.toList
-            } else {
-                parameterFilenames.value.toList
-            }
-        val format = optionFormat.value match {
-            case Some(s) =>
-                if (!Format.isFormat(s)) {
-                    parser.usage("Invalid fs-c file format")
-                }
-                s
-            case None => "protobuf"
-        }
-
-        val output = optionOutput.value match {
-            case Some(o) => o
-            case None    => throw new Exception("--output must be specified")
-        }
-        val compress = optionCompress.value match {
-            case Some(b) => b
-            case None    => false
-        }
-        val withFingerprint = optionWithFileFingerprint.value match {
-            case Some(b) => b
-            case None    => false
-        }
-        for (filename <- filenames) {
-            val importHandler = new ImportHandler(
-              output,
-              output,
-              threadCount,
-              compress,
-              withFingerprint
+        for (filename <- config.filenames) {
+            val handler = new ImportHandler(
+              config.output.get,
+              config.output.get,
+              config.threads,
+              config.compress,
+              config.fileFingerprint
             )
             val stream = if (filename.startsWith("hdfs://")) {
                 val conf = new Configuration()
                 val fs = FileSystem.get(new URI(filename), conf)
                 val path = new Path(filename)
                 fs.open(path)
-            } else {
-                new FileInputStream(filename)
-            }
-            val reader = Format(format).createReader(stream, importHandler)
-            val reporter = new Reporter(importHandler, reportInterval).start()
+            } else { new FileInputStream(filename) }
+
+            val reader = Format(config.format).createReader(stream, handler)
+            val reporter = new Reporter(handler, config.report).start()
             reader.parse()
 
             reporter.quit()
-            importHandler.quit()
+            handler.quit()
         }
     }
 }

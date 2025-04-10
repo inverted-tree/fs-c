@@ -18,18 +18,27 @@ import de.pc2.dedup.chunker.DigestFactory
 class FixedChunker(
     chunkSize: Int,
     digestFactory: DigestFactory,
-    val chunkerName: String
+    val chunkername: String
 ) extends Chunker {
+
+    override def chunkerName(): String = {
+        chunkername
+    }
 
     /** Creates a new fixed chunker session
       */
-    def createSession(): ChunkerSession = new FixedChunkerSession(chunkerName)
+    def createSession(): ChunkerSession = new FixedChunkerSession(chunkername)
 
     /** Fixed Chunker Session
       */
-    class FixedChunkerSession(val chunkerName: String) extends ChunkerSession {
-        val currentChunk = new Array[Byte](chunkSize)
-        var currentChunkPos = 0
+    private class FixedChunkerSession(val chunkername: String)
+        extends ChunkerSession {
+        private val currentChunk = new Array[Byte](chunkSize)
+        private var currentChunkPos = 0
+
+        override def chunkerName(): String = {
+            chunkername
+        }
 
         /** Creates a new chunk from all open chunk data
           */

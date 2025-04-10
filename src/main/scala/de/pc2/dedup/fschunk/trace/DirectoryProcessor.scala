@@ -6,7 +6,8 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicLong
 
-import scala.collection.JavaConversions.iterableAsScalaIterable
+//import scala.collection.JavaConverters.iterableAsScalaIterable
+import scala.jdk.CollectionConverters._
 
 import de.pc2.dedup.util.Log
 
@@ -60,7 +61,11 @@ object DirectoryProcessor extends Log {
     ): Long = {
         val files = directory.listFiles()
         if (files == null) {
-            throw new Exception(directory + " is invalid or IO error occurred")
+            throw new Exception(
+              "Directory '%s' is invalid or IO error occurred".format(
+                directory.toString
+              )
+            )
         }
         files.foreach(handler)
         files.length
@@ -72,7 +77,7 @@ object DirectoryProcessor extends Log {
     ): Long = {
         val dirStream = java.nio.file.Files.newDirectoryStream(directory.toPath)
         var fileCount = 0
-        for (path <- dirStream) {
+        for (path <- dirStream.asScala) {
             handler(path.toFile)
             fileCount += 1
         }

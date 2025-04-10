@@ -19,9 +19,11 @@ class RabinChunker(
     maximalSize: Int,
     logChunkHashes: Boolean,
     digestFactory: DigestFactory,
-    val chunkerName: String
+    val chunkername: String
 ) extends Chunker
     with Log {
+
+    override def chunkerName(): String = { chunkername }
 
     /** windows rabin instance
       */
@@ -35,16 +37,18 @@ class RabinChunker(
 
     /** Creates a new rabin chunking session
       */
-    def createSession(): ChunkerSession = new RabinChunkerSession(chunkerName)
+    def createSession(): ChunkerSession = new RabinChunkerSession(chunkername)
 
     /** session class
       */
-    private class RabinChunkerSession(val chunkerName: String)
+    private class RabinChunkerSession(val chunkername: String)
         extends ChunkerSession {
         val rabinSession = rabinWindow.createSession()
         val overflowChunk = new Array[Byte](maximalSize)
         var overflowChunkPos: Int = 0
         val digestBuilder = digestFactory.builder()
+
+        override def chunkerName(): String = { chunkername }
 
         /** Also, adds the rabin fingerprint (hash) to the chunk. Usually the
           * rabin hash has the hash breakmark as a suffix, but this is not the

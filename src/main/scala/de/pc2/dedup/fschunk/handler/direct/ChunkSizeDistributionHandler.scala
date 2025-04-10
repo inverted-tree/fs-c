@@ -1,6 +1,6 @@
 package de.pc2.dedup.fschunk.handler.direct
 
-import scala.collection.JavaConversions.mapAsScalaMap
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable.Map
 import de.pc2.dedup.chunker.Chunk
 import de.pc2.dedup.chunker.File
@@ -46,7 +46,7 @@ class ChunkSizeDistributionHandler() extends FileDataHandler with Log {
 
     override def quit(): Unit = {
         println("Chunk Size Distribution Results")
-        outputMapToConsole(chunkSizeMap, orderingBySize)
+        outputMapToConsole(chunkSizeMap.asScala.to(mutable.Map), orderingBySize)
     }
 
     def orderingBySize(value: (Int, java.lang.Long)): (Int) = {

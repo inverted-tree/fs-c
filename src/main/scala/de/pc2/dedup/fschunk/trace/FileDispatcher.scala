@@ -26,9 +26,7 @@ trait FileDispatcher extends Reporting {
 
     def waitUntilFinished(): Unit
 
-    def isLeader: Boolean = {
-        true
-    }
+    def isLeader: Boolean = true
 
     def quit(): Unit = {}
 }
@@ -36,8 +34,8 @@ trait FileDispatcher extends Reporting {
 /** Dispatches files to a number of file processors that chunk the file contents
   */
 class ThreadPoolFileDispatcher(
-    processorNum: Int,
-    chunker: Seq[(Chunker, List[FileDataHandler])],
+    threads: Int,
+    chunkers: Seq[(Chunker, List[FileDataHandler])],
     useDefaultIgnores: Boolean,
     followSymlinks: Boolean,
     useRelativePaths: Boolean,
@@ -53,12 +51,10 @@ class ThreadPoolFileDispatcher(
     val activeDirCount = new AtomicLong()
     val activeFileCount = new AtomicLong()
 
-    private def shouldShutdown(): Boolean = {
-        return activeAllCount.get() == 0
-    }
+    private def shouldShutdown(): Boolean = activeAllCount.get() == 0
 
-    def getRejectionPolicy(): RejectedExecutionHandler = {
-        if (processorNum == 1)
+    private def getRejectionPolicy: RejectedExecutionHandler = {
+        if (threads == 1)
             new BlockThenRunPolicy()
         else
             new ThreadPoolExecutor.CallerRunsPolicy()
@@ -72,7 +68,7 @@ class ThreadPoolFileDispatcher(
           30,
           TimeUnit.SECONDS,
           new ArrayBlockingQueue[Runnable](1024),
-          getRejectionPolicy()
+          getRejectionPolicy
         ) {
         logger.debug(
           "Created directory thread pool with at most %d threads".format(2)
@@ -108,15 +104,15 @@ class ThreadPoolFileDispatcher(
 
     class FileDispatcherThreadPoolExecutor(dispatcher: ThreadPoolFileDispatcher)
         extends ThreadPoolExecutor(
-          processorNum,
-          processorNum,
+          threads,
+          threads,
           30,
           TimeUnit.SECONDS,
-          new ArrayBlockingQueue[Runnable](processorNum * 1024),
-          getRejectionPolicy()
+          new ArrayBlockingQueue[Runnable](threads * 1024),
+          getRejectionPolicy
         ) {
         logger.debug(
-          "Created file threadpool with at most %d threads".format(processorNum)
+          "Created file 'threadpool' with at most %d threads".format(threads)
         )
         override def afterExecute(r: Runnable, t: Throwable): Unit = {
             if (shouldShutdown()) {
@@ -125,13 +121,13 @@ class ThreadPoolFileDispatcher(
         }
     }
 
-    FileProcessor.init(chunker, progressHandler, useRelativePaths)
+    FileProcessor.init(chunkers, progressHandler, useRelativePaths)
     DirectoryProcessor.init(this, useJavaDirectoryListing)
-    val fileexecutor = new FileDispatcherThreadPoolExecutor(this)
-    val direxecutor = new DirectoryDispatcherThreadPoolExecutor(this)
+    val fileExecutor = new FileDispatcherThreadPoolExecutor(this)
+    val dirExecutor = new DirectoryDispatcherThreadPoolExecutor(this)
 
     def dispatch(
-        f: File,
+        file: File,
         path: String,
         isDir: Boolean,
         source: Option[String],
@@ -140,10 +136,10 @@ class ThreadPoolFileDispatcher(
         val activeCount = activeAllCount.incrementAndGet()
         if (isDir) {
             activeDirCount.incrementAndGet()
-            direxecutor.execute(
+            dirExecutor.execute(
               new DirectoryParentRunnable(
                 new DirectoryProcessor(
-                  f,
+                  file,
                   source,
                   label,
                   useDefaultIgnores,
@@ -153,8 +149,10 @@ class ThreadPoolFileDispatcher(
             )
         } else {
             activeFileCount.incrementAndGet()
-            fileexecutor.execute(
-              new FileParentRunnable(new FileProcessor(f, path, source, label))
+            fileExecutor.execute(
+              new FileParentRunnable(
+                new FileProcessor(file, path, source, label)
+              )
             )
         }
     }
@@ -170,8 +168,8 @@ class ThreadPoolFileDispatcher(
     private def executorFinished(): Unit = {
         logger.info("Dispatching finished")
 
-        direxecutor.shutdown()
-        fileexecutor.shutdown()
+        dirExecutor.shutdown()
+        fileExecutor.shutdown()
 
         lock.synchronized {
             finished = true
@@ -184,18 +182,18 @@ class ThreadPoolFileDispatcher(
         if (secs > 0) {
             val mbs = FileProcessor.totalRead.get() / secs
             logger.info(
-              "Files total: %d, data %s (%s/s), active: %d, scheduled: %d, pool %d, directories total: %d, active: %d, scheduled %d, pool %d, skipped %d"
+              "Total Files: %d, Data: %s (%s/s), Active Files: %d, Scheduled Files: %d, File Pool Size: %d, Total Dirs: %d, Active Dirs: %d, Scheduled Dirs: %d, Dir Pool Size: %d, Skipped Dirs: %d"
                   .format(
                     FileProcessor.totalCount.get(),
                     StorageUnit(FileProcessor.totalRead.get()),
                     StorageUnit(mbs),
                     FileProcessor.activeCount.get(),
                     activeFileCount.get(),
-                    fileexecutor.getPoolSize,
+                    fileExecutor.getPoolSize,
                     DirectoryProcessor.totalCount.get(),
                     DirectoryProcessor.activeCount.get(),
                     activeDirCount.get(),
-                    direxecutor.getPoolSize,
+                    dirExecutor.getPoolSize,
                     DirectoryProcessor.skipCount.get()
                   )
             )
